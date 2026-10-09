@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { scanCommand } from "./index";
 
 /** Execute-or-not cases: [command, blocked binary or null]. */
@@ -91,5 +91,19 @@ describe("tool-guard scanCommand", () => {
 		for (const bad of ["grep -r 'foo", "ls $(find .", "bash -c `grep", "echo 'unterminated"]) {
 			expect(() => scanCommand(bad)).not.toThrow();
 		}
+	});
+});
+
+describe("tool-guard override marker", () => {
+	const original = process.env.PI_TOOL_GUARD_OVERRIDE;
+	afterEach(() => {
+		if (original === undefined) delete process.env.PI_TOOL_GUARD_OVERRIDE;
+		else process.env.PI_TOOL_GUARD_OVERRIDE = original;
+	});
+
+	it("is ignored while the human has not enabled it", async () => {
+		delete process.env.PI_TOOL_GUARD_OVERRIDE;
+		const mod = await import(`./index.ts?off=${Date.now()}`);
+		expect(mod.scanCommand("grep foo f # tool-guard override: fd cannot do this")?.binary).toBe("grep");
 	});
 });

@@ -377,7 +377,21 @@ function blockMessage(hit: Hit): string {
  * ------------------------------------------------------------------ */
 
 let blockedTotal = 0;
+let overridden = 0;
 const blockedByBinary = new Map<string, number>();
+
+/**
+ * Marker that re-opens the blocked binary for one command, but only when the
+ * human enables it with PI_TOOL_GUARD_OVERRIDE=1. AGENTS.md allows a fallback
+ * "and say why in one line", so the command must carry its own reason, which
+ * is surfaced back to the model. Off by default, and a model cannot enable it.
+ */
+const OVERRIDE = /#\s*tool-guard\s+override\s*:\s*(.{3,160})/i;
+
+function overrideEnabled(): boolean {
+	const v = (process.env.PI_TOOL_GUARD_OVERRIDE ?? "").toLowerCase();
+	return v === "1" || v === "true" || v === "on";
+}
 
 /** Per-run opt-out, e.g. `PI_TOOL_GUARD=off pi`. */
 function enabled(): boolean {
@@ -388,6 +402,11 @@ function enabled(): boolean {
 function check(command: string): ToolCallEventResult | undefined {
 	const hit = scanCommand(command);
 	if (!hit) return undefined;
+	const claim = command.match(OVERRIDE);
+	if (overrideEnabled() && claim) {
+		overridden++;
+		return undefined;
+	}
 	blockedTotal++;
 	blockedByBinary.set(hit.binary, (blockedByBinary.get(hit.binary) ?? 0) + 1);
 	return { block: true, reason: blockMessage(hit) };
@@ -411,15 +430,19 @@ export default function toolGuard(pi: ExtensionAPI) {
 	// `/tool-guard` — confirm the guard is loaded and see what it stopped.
 	pi.registerCommand("tool-guard", {
 		description: "Show tool-guard status and blocked-command counts",
-		handler: (_args, ctx) => {
-			const stats = [...blockedByBinary.entries()]
-				.map(([binary, n]) => `${binary}: ${n}`)
-				.join(", ");
-			const text = enabled()
-				? `tool-guard active — blocked ${blockedTotal} shell call(s)${stats ? ` (${stats})` : ""}.`
-				: `tool-guard disabled by PI_TOOL_GUARD for this run.`;
-			if (ctx.hasUI) ctx.ui.notify(text, "info");
-			else console.log(text);
-		},
+			handler: (_args, ctx) => {
+				const stats = [...blockedByBinary.entries()]
+					.map(([binary, n]) => `${binary}: ${n}`)
+					.join(", ");
+				const state = enabled()
+					? `tool-guard active — blocked ${blockedTotal} shell call(s)${stats ? ` (${stats})` : ""}`
+					: `tool-guard disabled by PI_TOOL_GUARD for this run.`;
+				const over = overrideEnabled()
+					? `override marker allowed (PI_TOOL_GUARD_OVERRIDE=1, ${overridden} used)`
+					: `override marker ignored (set PI_TOOL_GUARD_OVERRIDE=1 to allow \`# tool-guard override: <reason>\`)`;
+				const text = `${state}. ${over}.`;
+				if (ctx.hasUI) ctx.ui.notify(text, "info");
+				else console.log(text);
+			},
 	});
 }
