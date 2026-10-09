@@ -1,109 +1,132 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { scanCommand } from "./index";
+import { describe, expect, it } from "bun:test";
+import { transform } from "./index";
 
-/** Execute-or-not cases: [command, blocked binary or null]. */
-const cases: [string, string | null][] = [
-	// --- blocked: direct calls ---
-	["find . -name '*.ts'", "find"],
-	["find /home/hakergeniusz -name '*.skill*' | head -50", "find"],
-	["/usr/bin/find /tmp -type f", "find"],
-	["grep -rn 'foo' src", "grep"],
-	["rg -n 'x' src | grep -v test", "grep"],
-	["cat file | grep foo", "grep"],
-	["egrep -i 'a|b' file", "egrep"],
-	["fgrep 'literal' file", "fgrep"],
-	["python3 script.py", "python3"],
-	["python3 - <<'PY'\nprint(1)\nPY", "python3"],
-	["python -m pip install x", "python"],
-	["pip install fasttext", "pip"],
-	["pip3 --version", "pip3"],
-	["uv run python -c 'print(1)'", null],
+/** [command, expected rewritten command, blocked reason substring or null]. */
+const cases: [string, string | null, string | null][] = [
+	// --- find -> fd ---
+	[
+		"find /tmp/ai-agent -type f -name 'scan*.py' -exec grep -l 'HARD' {} \\; 2>/dev/null",
+		"fd -HI -tf -s -g 'scan*.py' /tmp/ai-agent 2>/dev/null -x rg -l 'HARD' {}",
+		null,
+	],
+	["find . -name '*.ts'", "fd -HI -s -g '*.ts' .", null],
+	[
+		"find /home/hakergeniusz -maxdepth 6 -name \"*.sh\" -type f 2>/dev/null | wc -l",
+		"fd -HI -d 6 -tf -s -g \"*.sh\" /home/hakergeniusz 2>/dev/null | wc -l",
+		null,
+	],
+	["find . -iname 'README*'", "fd -HI -i -g 'README*' .", null],
+	["find /src -path '*/features/*.ts'", "fd -HI -s -p -g '*/features/*.ts' /src", null],
+	["find /data -mindepth 2 -maxdepth 4 -type d", "fd -HI --min-depth 2 -d 4 -td -s /data", null],
+	["find /src -type f -name '*.ts' -exec wc -l {} +", "fd -HI -tf -s -g '*.ts' /src -X wc -l {}", null],
+	["/usr/bin/find /tmp -name x", "fd -HI -s -g x /tmp", null],
+	["sudo find / -name '*.ts'", "sudo fd -HI -s -g '*.ts' /", null],
 
-	// --- blocked through wrappers ---
-	["sudo find / -name '*.ts'", "find"],
-	["timeout 60 grep -r foo src", "grep"],
-	["env PYTHONPATH=. python3 x.py", "python3"],
-	["nohup python3 worker.py &", "python3"],
-	["nice -n 10 find . -name x", "find"],
-	["flock /tmp/lock python3 x.py", "python3"],
-	["cat files.txt | xargs grep foo", "grep"],
-	["xargs -I{} python3 {}", "python3"],
-	["command grep foo file", "grep"],
-	["bash -c 'find . -name x'", "find"],
-	["bash -lc \"grep -r foo src\"", "grep"],
-	["sh -c 'python3 -V'", "python3"],
-	["busybox find . -name x", "find"],
-	["eval \"grep -r foo .\"", "grep"],
-	["echo hi && grep foo f", "grep"],
-	["if true; then find . -name x; fi", "find"],
+	// --- grep -> rg ---
+	["grep -rn 'foo' src", "rg -n -u 'foo' src", null],
+	["grep -r 'foo' .", "rg -u 'foo' .", null],
+	["grep -rl 'llama.cpp' .", "rg -l -u 'llama.cpp' .", null],
+	["fd -e py -e scan /tmp/ai-agent | grep HARD", "fd -e py -e scan /tmp/ai-agent | rg HARD", null],
+	["cat file | grep foo", "cat file | rg foo", null],
+	["echo hi && grep foo f", "echo hi && rg foo f", null],
+	["grep -oiE 'ch=[0-9]+|ch:[0-9]+' file.html", "rg -o -i 'ch=[0-9]+|ch:[0-9]+' file.html", null],
+	["grep -c '' file", "rg -c '' file", null],
+	["grep -L 'foo' *.txt", "rg --files-without-match 'foo' *.txt", null],
+	["grep --include='*.py' -rn 'import' .", "rg -n -u -g '*.py' 'import' .", null],
+	["grep --exclude-dir=node_modules -r 'x' .", "rg -u -g '!node_modules/' 'x' .", null],
+	["grep -m 5 'x' f", "rg -m 5 'x' f", null],
+	["fgrep 'literal' file", "rg -F 'literal' file", null],
+	["egrep -i 'a|b' file", "rg -i 'a|b' file", null],
+	["grep -A3 -B1 'err' log", "rg -A 3 -B 1 'err' log", null],
 
-	// --- blocked inside substitutions ---
-	["ls $(find . -name '*.ts')", "find"],
-	["cat `grep -l foo *.txt`", "grep"],
-	["for f in $(find . -name '*.ts'); do echo $f; done", "find"],
+	// --- python / pip -> uv ---
+	["python3 script.py", "uv run python script.py", null],
+	["python3 - <<'PY'\nprint(1)\nPY", "uv run python - <<'PY'\nprint(1)\nPY", null],
+	["python3 -c 'print(1)'", "uv run python -c 'print(1)'", null],
+	["python3 --version", "uv run python --version", null],
+	["python3 -m pip install fasttext", "uv pip install fasttext", null],
+	["python3 -m pytest -q tests/", "uv run python -m pytest -q tests/", null],
+	["pip install fasttext", "uv pip install fasttext", null],
+	["pip3 install -r requirements.txt", "uv pip install -r requirements.txt", null],
+	["pip list", "uv pip list", null],
 
-	// --- allowed: probes and searches that only mention the binary ---
-	["which find", null],
-	["command -v python3", null],
-	["type grep", null],
-	["whereis rg", null],
-	["rg -n 'grep|find' src", null],
-	["rg -n 'python3' README.md", null],
-	["rg --files | rg -v node_modules", null],
-	["fd -e ts src", null],
-	["fd -H -e ts . | head", null],
-	["trash -rf /tmp/ai-agent/x", null],
-	["trash list", null],
-	["uv pip install fasttext", null],
-	["uv tool run ruff check .", null],
-	["uv run python - <<'PY'\nprint(1)\nPY", null],
-	["uv add fasttext", null],
+	// --- indirection ---
+	["bash -c 'grep -r foo .'", "bash -c 'rg -u foo .'", null],
+	["bash -lc \"grep -r foo src\"", "bash -lc \"rg -u foo src\"", null],
+	["sh -c 'python3 -V'", "sh -c 'uv run python -V'", null],
+	["ls $(find . -name '*.ts')", "ls $(fd -HI -s -g '*.ts' .)", null],
+	["cat `grep -l foo *.txt`", "cat `rg -l foo *.txt`", null],
+	["for f in $(find . -name '*.ts'); do echo $f; done", "for f in $(fd -HI -s -g '*.ts' .); do echo $f; done", null],
+	["xargs grep foo", "xargs rg foo", null],
+	["cat files.txt | xargs grep -l foo", "cat files.txt | xargs rg -l foo", null],
+	["env PYTHONPATH=. python3 x.py", "env PYTHONPATH=. uv run python x.py", null],
+	["timeout 60 grep -r foo src", "timeout 60 rg -u foo src", null],
+	["nohup python3 worker.py &", "nohup uv run python worker.py &", null],
+	["eval \"grep -r foo .\"", "eval \"rg -u foo .\"", null],
+	["if true; then find . -name x; fi", "if true; then fd -HI -s -g x .; fi", null],
+	["command grep foo file", "rg foo file", null],
 
-	// --- allowed: the binary appears only as data ---
-	["echo 'grep -r foo' > /tmp/cmd.txt", null],
-	["cat > /tmp/script.sh <<'EOF'\ngrep foo file\nEOF\nbash /tmp/script.sh", null],
-	["rg -c 'python' /tmp/agents.txt", null],
-	["ls \"$(which grep)\"", null],
-	["find . -name x | wc -l", "find"],
-	["py -m pip install x", "py"],
-	["findstr /s foo *.txt", "findstr"],
+	// --- data, not execution ---
+	["which find", null, null],
+	["command -v grep", null, null],
+	["type python3", null, null],
+	["rg -n 'grep|find' src", null, null],
+	["rg -n 'python3' README.md", null, null],
+	["rg --files | rg -v node_modules", null, null],
+	["fd -e ts src", null, null],
+	["trash -rf /tmp/ai-agent/x", null, null],
+	["uv run python -c 'print(1)'", null, null],
+	["uv pip install fasttext", null, null],
+	["uv add fasttext", null, null],
+	["echo 'grep -r foo' > /tmp/cmd.txt", null, null],
+	["cat > /tmp/script.sh <<'EOF'\ngrep foo file\nEOF\nbash /tmp/script.sh", null, null],
+	["rg -c 'python' /tmp/agents.txt", null, null],
+	["ls \"$(which grep)\"", null, null],
+
+	// --- blocked: no faithful rewrite ---
+	["find . -mtime -7 -name '*.log'", null, "-mtime"],
+	["find . -size +1M", null, "-size"],
+	["find . -name '*.ts' -o -name '*.tsx'", null, "-o"],
+	["find . -newer /tmp/ref", null, "-newer"],
+	["grep -P '\\d+' f", null, "-P"],
+	["grep -f patterns.txt f", null, "-f"],
+	["pip download x", null, "no uv equivalent"],
+	["pip install --break-system-packages x", null, "--break-system-packages"],
 ];
 
-describe("tool-guard scanCommand", () => {
-	for (const [command, expected] of cases) {
-		const label = JSON.stringify(command.length > 60 ? command.slice(0, 57) + "..." : command);
-		it(`${expected ? "blocks" : "allows"} ${label}`, () => {
-			const hit = scanCommand(command);
-			if (expected === null) {
-				expect(hit).toBeNull();
-			} else {
-				expect(hit?.binary).toBe(expected);
+describe("tool-guard transform", () => {
+	for (const [command, expected, blocked] of cases) {
+		const label = JSON.stringify(command.length > 58 ? command.slice(0, 55) + "..." : command);
+		const verb = blocked ? "blocks" : expected ? "rewrites" : "leaves";
+		it(`${verb} ${label}`, () => {
+			const outcome = transform(command);
+			if (blocked) {
+				expect(outcome.ok).toBe(false);
+				if (!outcome.ok) expect(outcome.reason).toContain(blocked);
+				return;
 			}
+			expect(outcome.ok).toBe(true);
+			if (outcome.ok) expect(outcome.command).toBe(expected ?? command);
 		});
 	}
 
-	it("keeps parsing bounded on deeply nested wrappers", () => {
-		const deep = "sudo ".repeat(20) + "grep -r foo .";
-		expect(scanCommand(deep)?.binary).toBe("grep");
-	});
-
-	it("does not crash on unterminated quotes or substitutions", () => {
-		for (const bad of ["grep -r 'foo", "ls $(find .", "bash -c `grep", "echo 'unterminated"]) {
-			expect(() => scanCommand(bad)).not.toThrow();
+	it("records which binary it rewrote", () => {
+		const outcome = transform("find . -name '*.py' | grep foo");
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.rewrites).toEqual([
+				{ binary: "find", to: "fd" },
+				{ binary: "grep", to: "rg" },
+			]);
 		}
 	});
-});
 
-describe("tool-guard override marker", () => {
-	const original = process.env.PI_TOOL_GUARD_OVERRIDE;
-	afterEach(() => {
-		if (original === undefined) delete process.env.PI_TOOL_GUARD_OVERRIDE;
-		else process.env.PI_TOOL_GUARD_OVERRIDE = original;
-	});
-
-	it("is ignored while the human has not enabled it", async () => {
-		delete process.env.PI_TOOL_GUARD_OVERRIDE;
-		const mod = await import(`./index.ts?off=${Date.now()}`);
-		expect(mod.scanCommand("grep foo f # tool-guard override: fd cannot do this")?.binary).toBe("grep");
+	it("keeps parsing bounded and never throws", () => {
+		const deep = "sudo ".repeat(20) + "grep -r foo .";
+		const outcome = transform(deep);
+		expect(outcome.ok).toBe(true);
+		for (const bad of ["grep -r 'foo", "ls $(find .", "bash -c `grep", "echo 'unterminated", "find . -name", ""]) {
+			expect(() => transform(bad)).not.toThrow();
+		}
 	});
 });
