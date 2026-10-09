@@ -64,8 +64,8 @@ PI_TOOL_GUARD=off pi
 ## Tests
 
 ```bash
-cd ~/projects/pi-tool-guard && bun test          # 72 cases: rewrites, blocks, leaves alone
-bash /tmp/ai-agent/guard-check/verify.sh          # 10 shell equivalence checks: fd/rg vs find/grep output
+cd ~/projects/pi-tool-guard && bun test   # 75 cases: rewrites, blocks, leaves alone
+bash ~/projects/pi-tool-guard/verify.sh   # 11 shell equivalence checks: fd/rg vs find/grep
 ```
 
 ## Known limits

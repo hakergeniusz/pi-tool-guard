@@ -455,11 +455,14 @@ function rewriteFind(toks: Tok[], depth: number): Outcome {
 	}
 
 	const args = [...flags];
-	if (caseFlag) args.push(caseFlag);
 	if (glob !== null) {
+		// fd takes [PATTERN] [PATH...], so the glob always precedes the paths.
+		if (caseFlag) args.push(caseFlag);
 		if (fullPath) args.push("-p");
 		args.push("-g", glob);
-	} else if (paths.length === 0) {
+	} else {
+		// No -name predicate: find lists everything, so fd needs a match-all
+		// pattern before the paths, or it would treat the path as the pattern.
 		args.push(".");
 	}
 	args.push(...paths, ...tail);
