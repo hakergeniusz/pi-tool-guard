@@ -1,0 +1,31 @@
+{
+	"name": "pi-tool-guard",
+	"version": "1.0.0",
+	"description": "Hard-blocks find, grep and bare python/pip inside pi's bash and powershell tools, per AGENTS.md (use fd, rg and uv).",
+	"type": "module",
+	"license": "MIT",
+	"keywords": [
+		"pi",
+		"pi-package",
+		"bash",
+		"safety",
+		"agents-md"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/hakergeniusz/pi-tool-guard.git"
+	},
+	"bugs": {
+		"type": "git",
+		"url": "https://github.com/hakergeniusz/pi-tool-guard/issues"
+	},
+	"homepage": "https://github.com/hakergeniusz/pi-tool-guard#readme",
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
