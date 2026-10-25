@@ -83,6 +83,10 @@ const cases: [string, string | null, string | null][] = [
 	["uv add fasttext", null, null],
 	["echo 'grep -r foo' > /tmp/cmd.txt", null, null],
 	["cat > /tmp/script.sh <<'EOF'\ngrep foo file\nEOF\nbash /tmp/script.sh", null, null],
+	// heredoc opener followed by a pipe/redirect: body is still data
+	["cat <<'EOF' | wc -l\ngrep foo file\nEOF", null, null],
+	["cat <<EOF > out.txt\nfind . -name '*.py'\nEOF", null, null],
+	["python3 - <<'PY' | tail -5\nimport subprocess; subprocess.run(['grep', 'x'])\nPY", "uv run python - <<'PY' | tail -5\nimport subprocess; subprocess.run(['grep', 'x'])\nPY", null],
 	["rg -c 'python' /tmp/agents.txt", null, null],
 	["ls \"$(which grep)\"", null, null],
 

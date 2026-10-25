@@ -230,7 +230,12 @@ function heredocRanges(command: string): [number, number][] {
 			else ranges.push([start, start + line.length]);
 			continue;
 		}
-		const opening = line.match(/<<[-]?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1\s*$/);
+		// The delimiter must be followed by end-of-line or whitespace (then any
+		// trailing operators like `| wc -l` or `> out`): requiring end-of-line
+		// missed openers such as `cat << EOF | wc -l`, leaving their bodies
+		// unprotected. A quoted or arithmetic `<<` still never matches, because
+		// the delimiter would have to be followed by a quote/paren character.
+		const opening = line.match(/<<[-]?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1(?=\s|$)/);
 		if (opening) delimiter = opening[2];
 	}
 	return ranges;
